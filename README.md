@@ -172,3 +172,32 @@ done
 ```
 
 **Auswirkung:** Kein Datenverlust – nur die Platzreservierung wird aufgehoben. Der zvol kann theoretisch mehr Daten enthalten als auf dem Pool physisch frei ist (Thin Provisioning). Bei produktiven Pools Belegung im Auge behalten.
+
+## Vorbereitung Rückmigration (--prepare-reverse)
+
+Vor der Rückmigration müssen bestehende Datasets auf `data` gelöscht werden, da `zfs receive` sonst abbricht. `--prepare-reverse` erledigt das sicher mit Übersicht und Bestätigung.
+
+```bash
+bash zfs_migrate.sh --prepare-reverse
+```
+
+**Ablauf:**
+1. Alle Datasets auf `zdata` werden ermittelt
+2. Tabellarische Übersicht: welche existieren bereits auf `data`, welche nicht
+3. Warnung falls Datasets auf `zdata` fehlen (unvollständige Migration)
+4. Einzelne Bestätigung vor dem Löschen
+5. Löscht alle betroffenen Datasets auf `data` inkl. Snapshots (`-r`)
+
+**Vollständiger Workflow Rückmigration:**
+```bash
+# 1. Vorbereitung: data bereinigen
+bash zfs_migrate.sh --prepare-reverse
+
+# 2. Rückmigration starten
+bash zfs_migrate.sh --reverse
+
+# 3. Proxmox Storage zurück auf data umstellen
+# 4. VMs/LXCs starten und testen
+# 5. zdata bereinigen
+bash zfs_migrate.sh --cleanup-zdata
+```
