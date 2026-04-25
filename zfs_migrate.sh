@@ -52,32 +52,43 @@ declare -a MIGRATION_ORDER=()
 # =============================================================================
 
 recommend_volblocksize() {
+    # volblocksize richtet sich nach dem Gast-Dateisystem, NICHT nach dem Workload.
+    # Falsche Werte fuehren zu Write Amplification und Datenverlust-Risiko.
+    #
+    # Grundregeln:
+    #   Linux Gast (ext4/xfs, 4K Bloecke) -> 16K (sicherster Wert)
+    #   Windows Gast (NTFS, 4K Bloecke)   -> 16K oder 64K
+    #   Standardempfehlung fuer alle VMs  -> 16K
+    #
+    # HINWEIS: volblocksize kann nach der Erstellung NICHT mehr geaendert werden.
+    # Im Zweifel 16K waehlen - lieber konservativ als Write Amplification.
+
     local dataset="$1"
-    local current_vbs="$2"
     local volsize_gb="$3"
 
-    # Namensbasierte Heuristik
     case "$dataset" in
-        *samba*|*nas*|*share*|*files*)   echo "128K" ; return ;;
-        *docker*|*db*|*sql*|*pg*)        echo "16K"  ; return ;;
-        *win*|*windows*)                 echo "64K"  ; return ;;
-        *os*|*boot*|*system*)            echo "64K"  ; return ;;
+        *win*|*windows*) echo "16K" ; return ;;  # NTFS 4K nativ, 16K sicherer als 64K
     esac
 
-    # Groessenbasierte Heuristik
-    if   (( volsize_gb >= 2000 )); then echo "128K"   # Grosse Disks = Datenspeicher
-    elif (( volsize_gb >= 500  )); then echo "64K"
-    elif (( volsize_gb >= 100  )); then echo "64K"
-    else                                echo "16K"    # Kleine Disks = oft DB/OS
-    fi
+    # Standardempfehlung: 16K fuer alle Linux-Gaeste
+    echo "16K"
 }
 
 recommend_recordsize() {
+    # recordsize fuer ZFS Filesystems (LXC/subvol).
+    # Gilt nur fuer neu geschriebene Daten nach der Migration.
+    #
+    # Grundregeln:
+    #   Datenbanken (PostgreSQL etc.) -> 16K (passend zu DB-Blocksize 8K)
+    #   Gemischte Files (Nextcloud)   -> 128K
+    #   Grosse Mediendateien          -> 1M
+    #   Standard/unbekannt            -> 128K
+
     local dataset="$1"
     case "$dataset" in
-        *nextcloud*|*cloud*|*files*|*share*) echo "128K" ;;
         *db*|*sql*|*pg*|*postgres*)          echo "16K"  ;;
         *backup*|*media*|*immich*|*photo*)   echo "1M"   ;;
+        *nextcloud*|*cloud*|*files*|*share*) echo "128K" ;;
         *)                                    echo "128K" ;;
     esac
 }
@@ -280,7 +291,7 @@ prompt_direct_stream() {
 
 migrate_zvol() {
     local dataset="$1"
-    local vbs="${VOLBLOCKSIZE[$dataset]:-64K}"
+    local vbs="${VOLBLOCKSIZE[$dataset]:-16K}"
     local src="${SRC_POOL}/${dataset}"
     local dst="${DST_POOL}/${dataset}"
     local snap="${src}@${SNAP_SUFFIX}"
@@ -342,9 +353,9 @@ migrate_subvol() {
 
     if $use_snapshot; then
         if command -v pv &>/dev/null; then
-            zfs send -R "$snap" | pv -s "$size" | zfs receive -o recordsize="$rs" "$dst"
+            zfs send "$snap" | pv -s "$size" | zfs receive -o recordsize="$rs" "$dst"
         else
-            zfs send -R "$snap" | zfs receive -o recordsize="$rs" "$dst"
+            zfs send "$snap" | zfs receive -o recordsize="$rs" "$dst"
         fi
     else
         warn "Starte direktes Streaming von $src ..."
@@ -385,7 +396,7 @@ apply_pool_optimizations() {
     ok "compression=lz4 gesetzt"
     zfs set atime=off "$DST_POOL"
     ok "atime=off gesetzt"
-    log "ARC-Empfehlung: echo 'options zfs zfs_arc_max=68719476736' >> /etc/modprobe.d/zfs.conf"
+    log "ARC-Empfehlung: options zfs zfs_arc_max=128849018880 (120GB) in /etc/modprobe.d/zfs.conf"
     log "Dann: update-initramfs -u && reboot"
 }
 
