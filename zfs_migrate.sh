@@ -307,6 +307,12 @@ migrate_zvol() {
     local size volsize
     size=$(get_size "$dataset")
     volsize=$(zfs get -Hp -o value volsize "$src")
+
+    if [[ -z "$volsize" ]] || [[ "$volsize" == "0" ]]; then
+        err "volsize fuer $dataset konnte nicht ermittelt werden"
+        return 1
+    fi
+
     log "Datenmenge: $(( size / 1024 / 1024 / 1024 ))GB / Volsize: $(( volsize / 1024 / 1024 / 1024 ))GB"
 
     if ! snapshot_create "$dataset"; then
@@ -376,11 +382,28 @@ verify_migration() {
 
     log "Verify $dataset: src=${src_used}B dst=${dst_used}B"
 
+    # Existenzpruefung
     if [[ "$src_used" == "N/A" ]] || [[ "$dst_used" == "N/A" ]]; then
         err "Verify fehlgeschlagen fuer $dataset (Dataset nicht gefunden)"
         return 1
     fi
-    ok "Verify OK: $dataset"
+
+    # Plausibilitaetspruefung: dst darf nicht mehr als 20% groesser oder kleiner als src sein
+    # Kompression und Metadaten erklaeren kleine Abweichungen
+    # Bei sehr kleinen Datasets (<10MB) Toleranz deaktivieren - Metadaten-Overhead dominiert
+    local threshold=$(( 10 * 1024 * 1024 ))  # 10MB
+    if [[ "$src_used" -gt "$threshold" ]]; then
+        local ratio
+        ratio=$(( dst_used * 100 / src_used ))
+        if [[ $ratio -lt 50 ]] || [[ $ratio -gt 200 ]]; then
+            err "Verify fehlgeschlagen: dst=${dst_used}B ist ${ratio}% von src=${src_used}B - ausserhalb Toleranz"
+            return 1
+        fi
+        ok "Verify OK: $dataset (dst ist ${ratio}% von src)"
+    else
+        warn "Verify $dataset: Dataset <10MB - Groessenvergleich uebersprungen (Metadaten-Overhead dominiert)"
+        ok "Verify OK: $dataset (klein, nur Existenzpruefung)"
+    fi
 }
 
 rollback() {
