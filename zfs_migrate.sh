@@ -5,12 +5,13 @@
 # Datasets und Blockgroessen werden dynamisch ermittelt und abgefragt
 # =============================================================================
 # Verwendung:
-#   bash zfs_migrate.sh                  -> data -> zdata (alle Datasets)
-#   bash zfs_migrate.sh <dataset>        -> data -> zdata (einzelnes Dataset)
-#   bash zfs_migrate.sh --reverse        -> zdata -> data (alle Datasets)
-#   bash zfs_migrate.sh --reverse <ds>   -> zdata -> data (einzelnes Dataset)
-#   bash zfs_migrate.sh --cleanup        -> Snapshots auf data bereinigen
-#   bash zfs_migrate.sh --cleanup-zdata  -> Snapshots auf zdata bereinigen
+#   bash zfs_migrate.sh                     -> data -> zdata (alle Datasets)
+#   bash zfs_migrate.sh <dataset>           -> data -> zdata (einzelnes Dataset)
+#   bash zfs_migrate.sh --reverse           -> zdata -> data (alle Datasets)
+#   bash zfs_migrate.sh --reverse <ds>      -> zdata -> data (einzelnes Dataset)
+#   bash zfs_migrate.sh --prepare-reverse   -> data fuer Rueckmigration vorbereiten (Datasets loeschen)
+#   bash zfs_migrate.sh --cleanup           -> Snapshots auf data bereinigen
+#   bash zfs_migrate.sh --cleanup-zdata     -> Snapshots auf zdata bereinigen
 # =============================================================================
 
 set -euo pipefail
