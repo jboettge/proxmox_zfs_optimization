@@ -320,7 +320,7 @@ migrate_zvol() {
         use_snapshot=false
     fi
 
-    zfs create -V "$volsize" -b "$vbs" -o compression=lz4 "$dst"
+    zfs create -V "$volsize" -b "$vbs" -o compression=lz4 -o refreservation=none "$dst"
     ok "Ziel-zvol erstellt: $dst (volblocksize=$vbs)"
 
     if $use_snapshot; then
