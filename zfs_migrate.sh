@@ -465,6 +465,96 @@ migrate_dataset() {
 # Main
 # =============================================================================
 
+prepare_reverse() {
+    log "=== Vorbereitung Rueckmigration: Datasets auf $DST_POOL pruefen und loeschen ==="
+    echo ""
+
+    # Alle Datasets auf Quellpool (zdata) ermitteln
+    local src_datasets
+    mapfile -t src_datasets < <(zfs list -r -H -o name -t filesystem,volume "$SRC_POOL" \
+        | grep -v "^${SRC_POOL}$" \
+        | sed "s|^${SRC_POOL}/||")
+
+    if [[ ${#src_datasets[@]} -eq 0 ]]; then
+        err "Keine Datasets auf $SRC_POOL gefunden"
+        exit 1
+    fi
+
+    # Pruefen welche bereits auf Zielpool existieren
+    local to_delete=()
+    local missing=()
+
+    echo -e "${CYAN}Status der Datasets auf $DST_POOL:${NC}"
+    printf "%-40s %-10s %-15s %-15s\n" "DATASET" "STATUS" "SRC USED" "DST USED"
+    printf "%-40s %-10s %-15s %-15s\n" "-------" "------" "--------" "--------"
+
+    for ds in "${src_datasets[@]}"; do
+        local src="${SRC_POOL}/${ds}"
+        local dst="${DST_POOL}/${ds}"
+        local src_used dst_used status
+
+        src_used=$(zfs get -Hp -o value used "$src" 2>/dev/null || echo "N/A")
+        src_used_h=$(zfs get -H -o value used "$src" 2>/dev/null || echo "N/A")
+
+        if zfs list "$dst" &>/dev/null; then
+            dst_used_h=$(zfs get -H -o value used "$dst" 2>/dev/null || echo "N/A")
+            status="${YELLOW}existiert${NC}"
+            to_delete+=("$ds")
+        else
+            dst_used_h="-"
+            status="${GREEN}frei${NC}"
+            missing+=("$ds")
+        fi
+
+        printf "%-40s %-10b %-15s %-15s\n" "$ds" "$status" "$src_used_h" "$dst_used_h"
+    done
+
+    echo ""
+
+    if [[ ${#missing[@]} -gt 0 ]]; then
+        warn "Folgende Datasets existieren NICHT auf $SRC_POOL (zdata) - Rueckmigration unvollstaendig moeglich:"
+        for ds in "${missing[@]}"; do
+            warn "  - $ds"
+        done
+        echo ""
+    fi
+
+    if [[ ${#to_delete[@]} -eq 0 ]]; then
+        ok "$DST_POOL ist bereits bereit fuer Rueckmigration - keine Datasets zu loeschen"
+        exit 0
+    fi
+
+    warn "${#to_delete[@]} Datasets auf $DST_POOL werden geloescht um Rueckmigration zu ermoeglichen"
+    warn "ACHTUNG: Dieser Vorgang ist NICHT rueckgaengig zu machen!"
+    echo ""
+    read -rp "Alle aufgelisteten Datasets auf $DST_POOL loeschen? (yes/no): " confirm
+    [[ "$confirm" == "yes" ]] || { log "Abgebrochen."; exit 0; }
+
+    echo ""
+    local failed=()
+    for ds in "${to_delete[@]}"; do
+        local dst="${DST_POOL}/${ds}"
+        log "Loesche: $dst"
+        if zfs destroy -r "$dst" 2>/dev/null; then
+            ok "Geloescht: $dst"
+        else
+            err "Fehler beim Loeschen: $dst"
+            failed+=("$dst")
+        fi
+    done
+
+    echo ""
+    if [[ ${#failed[@]} -gt 0 ]]; then
+        err "Folgende Datasets konnten nicht geloescht werden:"
+        for ds in "${failed[@]}"; do
+            err "  - $ds"
+        done
+    else
+        ok "$DST_POOL bereit fuer Rueckmigration"
+        log "Starte Rueckmigration mit: bash $0 --reverse"
+    fi
+}
+
 main() {
     # Cleanup-Optionen
     if [[ "${1:-}" == "--cleanup" ]]; then
@@ -472,6 +562,13 @@ main() {
     fi
     if [[ "${1:-}" == "--cleanup-zdata" ]]; then
         cleanup_all_snapshots "zdata"; exit 0
+    fi
+    if [[ "${1:-}" == "--prepare-reverse" ]]; then
+        # Im reverse-Modus: SRC=zdata, DST=data
+        # prepare_reverse loescht Datasets auf DST (data) anhand von SRC (zdata)
+        SRC_POOL="zdata"
+        DST_POOL="data"
+        prepare_reverse; exit 0
     fi
 
     log "======================================================="
