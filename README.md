@@ -156,3 +156,19 @@ zfs destroy -r zdata/<dataset>   # verbleibende Datasets manuell löschen
 - `recordsize` gilt nur für neu geschriebene Daten - bestehende Blöcke behalten die alte Grösse
 - `SNAP_SUFFIX` enthält Datum und Uhrzeit des Skriptstarts - Datumswechsel während der Migration führt nicht zu Fehlern
 - `atime=off` wird nur auf Filesystem-Datasets gesetzt, nicht auf zvols
+
+## refreservation
+
+ZFS setzt bei zvols standardmässig `refreservation=volsize` – der gesamte zvol-Speicher wird auf dem Zielpool reserviert, unabhängig von der tatsächlichen Belegung. Bei einem 8TB zvol mit 56KB Daten werden trotzdem 8TB auf dem Pool belegt.
+
+Das Skript setzt `refreservation=none` beim Erstellen aller Ziel-zvols.
+
+**Falls bestehende zvols auf dem Zielpool zu viel Platz belegen:**
+```bash
+zfs list -r -t volume -H -o name <pool> | while read zvol; do
+    zfs set refreservation=none "$zvol"
+    echo "refreservation=none: $zvol"
+done
+```
+
+**Auswirkung:** Kein Datenverlust – nur die Platzreservierung wird aufgehoben. Der zvol kann theoretisch mehr Daten enthalten als auf dem Pool physisch frei ist (Thin Provisioning). Bei produktiven Pools Belegung im Auge behalten.
