@@ -13,31 +13,27 @@ ZFS-Migrationsskript für Proxmox zur Defragmentierung und Optimierung von `volb
 
 ```bash
 # Alle Datasets: data -> zdata
-bash zfs_migrate_data_to_zdata.sh
+bash zfs_migrate.sh
 
 # Einzelnes Dataset: data -> zdata
-bash zfs_migrate_data_to_zdata.sh vm-103-disk-1
+bash zfs_migrate.sh vm-103-disk-1
 
 # Rueckmigration: zdata -> data (alle Datasets)
-bash zfs_migrate_data_to_zdata.sh --reverse
+bash zfs_migrate.sh --reverse
 
 # Rueckmigration: einzelnes Dataset
-bash zfs_migrate_data_to_zdata.sh --reverse vm-103-disk-1
+bash zfs_migrate.sh --reverse vm-103-disk-1
 
 # Snapshots auf data bereinigen
-bash zfs_migrate_data_to_zdata.sh --cleanup
+bash zfs_migrate.sh --cleanup
 
 # Snapshots auf zdata bereinigen
-bash zfs_migrate_data_to_zdata.sh --cleanup-zdata
+bash zfs_migrate.sh --cleanup-zdata
 ```
 
 ## Ablauf
 
-### Phase 1: data → zdata
-
-```
-bash zfs_migrate_data_to_zdata.sh
-```
+### Phase 1: data -> zdata
 
 1. Prerequisite-Check (Root, Pools, freier Platz, laufende VMs/LXCs)
 2. Dynamische Erkennung aller Datasets auf `data`
@@ -48,11 +44,7 @@ bash zfs_migrate_data_to_zdata.sh
 7. Verify nach jedem Dataset
 8. Bei Fehler: interaktiver Rollback-Prompt
 
-### Phase 2: zdata → data (Rückmigration)
-
-```
-bash zfs_migrate_data_to_zdata.sh --reverse
-```
+### Phase 2: zdata -> data (Rückmigration)
 
 Identischer Ablauf, Quell- und Zielpool vertauscht. `data` ist danach defragmentiert und optimiert.
 
@@ -62,16 +54,16 @@ Vor der Migration wird für jedes Dataset die Blockgrösse abgefragt:
 
 ```
 DATASET                             TYP      GROESSE    AKTUELL      EMPFEHLUNG
-vm-103-disk-1                       zvol     8448GB     8K           128K
+vm-103-disk-1                       zvol     8448GB     8K           16K
 vm-121-disk-0                       zvol     3601GB     16K          16K
 subvol-106-disk-0                   subvol   1056GB     128K         128K
 
-  zvol vm-103-disk-1 [aktuell: 8K | empfohlen: 128K]: 
-  zvol vm-121-disk-0 [aktuell: 16K | empfohlen: 16K]: 
-  subvol subvol-106-disk-0 [aktuell: 128K | empfohlen: 128K]: 
+  zvol vm-103-disk-1 [aktuell: 8K | empfohlen: 16K]:
+  zvol vm-121-disk-0 [aktuell: 16K | empfohlen: 16K]:
+  subvol subvol-106-disk-0 [aktuell: 128K | empfohlen: 128K]:
 ```
 
-**Enter** übernimmt die Empfehlung. Alternativ kann ein eigener Wert eingegeben werden (z.B. `64K`).
+Enter übernimmt die Empfehlung. Alternativ kann ein eigener Wert eingegeben werden.
 
 Gültige Werte: `512`, `1K`, `2K`, `4K`, `8K`, `16K`, `32K`, `64K`, `128K`, `256K`, `512K`, `1M`
 
@@ -79,27 +71,30 @@ Gültige Werte: `512`, `1K`, `2K`, `4K`, `8K`, `16K`, `32K`, `64K`, `128K`, `256
 
 ### volblocksize (zvol)
 
-| Kriterium | Empfehlung |
+`volblocksize` richtet sich nach dem Gast-Dateisystem, NICHT nach dem Workload. Falsche Werte führen zu Write Amplification.
+
+| Gast-Dateisystem | Empfehlung |
 |---|---|
-| Name enthält `samba`, `share`, `nas`, `files` | `128K` |
-| Name enthält `docker`, `db`, `sql`, `pg` | `16K` |
-| Name enthält `win`, `windows` | `64K` |
-| Volsize ≥ 2 TB | `128K` |
-| Volsize ≥ 500 GB | `64K` |
-| Volsize < 500 GB | `16K` |
+| Linux (ext4/xfs, 4K Blöcke) | `16K` |
+| Windows (NTFS, 4K Blöcke) | `16K` |
+| Standard/unbekannt | `16K` |
+
+**Wichtig:** `volblocksize` kann nach der Erstellung nicht mehr geändert werden. Im Zweifel `16K` wählen.
 
 ### recordsize (subvol / LXC)
 
+`recordsize` gilt nur für neu geschriebene Daten nach der Migration.
+
 | Kriterium | Empfehlung |
 |---|---|
-| Name enthält `nextcloud`, `cloud`, `files`, `share` | `128K` |
-| Name enthält `db`, `sql`, `pg`, `postgres` | `16K` |
-| Name enthält `backup`, `media`, `immich`, `photo` | `1M` |
-| Sonstiges | `128K` |
+| Datenbanken (`db`, `sql`, `pg`, `postgres`) | `16K` (passend zu DB-Blocksize 8K) |
+| Mediendateien (`backup`, `media`, `immich`, `photo`) | `1M` |
+| Gemischte Files (`nextcloud`, `cloud`, `files`, `share`) | `128K` |
+| Standard/unbekannt | `128K` |
 
 ## Fallback: Direktes Streaming
 
-Falls auf dem Quellpool kein Platz für einen Snapshot vorhanden ist, fragt das Skript ob direkt gestreamt werden soll:
+Falls auf dem Quellpool kein Platz für einen Snapshot vorhanden ist:
 
 ```
 [WARN] Snapshot nicht moeglich (kein Platz) - Fallback: direktes Streaming
@@ -107,16 +102,24 @@ Falls auf dem Quellpool kein Platz für einen Snapshot vorhanden ist, fragt das 
 Direkt-Streaming fuer vm-103-disk-1 fortfahren? (yes/no):
 ```
 
-Direktes Streaming ist nur sicher wenn die betroffene VM/der LXC vollständig gestoppt ist.
+Direktes Streaming ist nur sicher wenn die VM/der LXC vollständig gestoppt ist.
+
+## Verify-Logik
+
+| Dataset-Grösse | Prüfung |
+|---|---|
+| > 10 MB | Ratio-Check: dst muss 50-200% von src sein |
+| <= 10 MB | Nur Existenzprüfung (Metadaten-Overhead dominiert bei kleinen Datasets wie EFI-Partitionen) |
 
 ## Fehlerbehandlung
 
 | Situation | Verhalten |
 |---|---|
+| `volsize` nicht lesbar | Sofortiger Abbruch, kein leeres zvol wird erstellt |
 | Snapshot fehlgeschlagen | Fallback-Prompt für direktes Streaming |
 | Migration fehlgeschlagen | Rollback-Prompt |
 | Verify fehlgeschlagen | Rollback-Prompt |
-| Ziel-Dataset existiert bereits | Überspringen (idempotent) |
+| Ziel-Dataset existiert bereits | Überspringen (idempotent, Wiederstart möglich) |
 | Dataset auf Quellpool nicht gefunden | Warnung, weiter mit nächstem |
 
 ## Vollständiger Workflow
@@ -140,28 +143,16 @@ pct start <ctid>
 # 5. Phase 2: zdata -> data (Rueckmigration)
 bash zfs_migrate.sh --reverse
 
-# 6. Proxmox Storage zurück auf data umstellen
+# 6. Proxmox Storage zurück auf data umstellen, VMs/LXCs testen
 
-# 7. VMs/LXCs erneut testen
-
-# 8. Aufräumen
-bash zfs_migrate_data_to_zdata.sh --cleanup-zdata
-zfs list -r zdata                        # verbleibende Datasets prüfen
-zfs destroy -r zdata/<dataset>           # manuell löschen falls nötig
-```
-
-## Logging
-
-Jeder Lauf schreibt ein Log nach `/var/log/zfs_migrate_<datum>_<uhrzeit>.log`.
-
-```bash
-tail -f /var/log/zfs_migrate_*.log
+# 7. Aufräumen
+bash zfs_migrate.sh --cleanup-zdata
+zfs destroy -r zdata/<dataset>   # verbleibende Datasets manuell löschen
 ```
 
 ## Wichtige Hinweise
 
-- `volblocksize` kann **nur beim Erstellen** eines zvol gesetzt werden – die Migration ist die einzige Möglichkeit zur nachträglichen Änderung
-- `recordsize` gilt nur für **neu geschriebene Daten** – bestehende Blöcke behalten die alte Grösse bis sie überschrieben werden
-- Der `SNAP_SUFFIX` enthält Datum **und Uhrzeit** des Skriptstarts – ein Datumswechsel während der Migration führt nicht zu Fehlern
+- `volblocksize` kann nur beim Erstellen gesetzt werden - die Migration ist die einzige Möglichkeit. Im Zweifel `16K`.
+- `recordsize` gilt nur für neu geschriebene Daten - bestehende Blöcke behalten die alte Grösse
+- `SNAP_SUFFIX` enthält Datum und Uhrzeit des Skriptstarts - Datumswechsel während der Migration führt nicht zu Fehlern
 - `atime=off` wird nur auf Filesystem-Datasets gesetzt, nicht auf zvols
-- Nach der Migration ist `compression=lz4` und `atime=off` auf dem Zielpool gesetzt
