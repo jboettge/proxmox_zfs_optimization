@@ -1,4 +1,4 @@
-# zfs_migrate_data_to_zdata.sh
+# zfs_migrate.sh
 
 ZFS-Migrationsskript für Proxmox zur Defragmentierung und Optimierung von `volblocksize`/`recordsize` durch Umzug auf einen zweiten Pool und zurück.
 
